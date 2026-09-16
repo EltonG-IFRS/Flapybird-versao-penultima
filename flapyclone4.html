@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clone Flappy Bird (FlapJS)</title>
+  <style>
+    body {
+      background-color: #1a1a1a;
+      color: #ffffff;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      overflow: hidden;
+    }
+
+    h1 {
+      margin-bottom: 5px;
+      color: #ffeb3b;
+    }
+
+    #score-board {
+      display: flex;
+      gap: 20px;
+      font-size: 24px;
+      margin-bottom: 10px;
+      font-weight: bold;
+      color: #ffffff;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+    }
+
+    #high-score {
+      color: #ffeb3b;
+    }
+
+    canvas {
+      background-color: #4fc3f7;
+      border: 4px solid #ffffff;
+      box-shadow: 0 0 25px rgba(255, 235, 59, 0.3);
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    .instructions {
+      margin-top: 15px;
+      color: #aaaaaa;
+      font-size: 16px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>FlapJS</h1>
+  <div id="score-board">
+    <div id="score">Pontuação: 0</div>
+    <div id="high-score">Recorde: 0</div>
+  </div>
+  
+  <canvas id="gameCanvas" width="400" height="600"></canvas>
+  <div class="instructions">Pressione a <strong>Barra de Espaço</strong> ou <strong>Toque/Clique</strong> para Voar!</div>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreElement = document.getElementById('score');
+    const highScoreElement = document.getElementById('high-score');
+
+    // =========================================================================
+    // 1. CARREGAMENTO DE ASSETS (IMAGENS E SONS)
+    // =========================================================================
+
+    const birdImg = new Image();
+    birdImg.src = 'imagens/passaro.png';
+
+    const pipeImg = new Image();
+    pipeImg.src = 'imagens/cano.png';
+
+    const bgImg = new Image();
+    bgImg.src = 'imagens/fundo.png';
+
+    const soundFlap = new Audio('sons/pulo.mp3');
+    const soundScore = new Audio('sons/ponto.mp3');
+    const soundHit = new Audio('sons/hit.mp3');
+
+    function playSound(sound) {
+      sound.currentTime = 0;
+      sound.play().catch(() => {});
+    }
+
+    // =========================================================================
+    // 2. CONFIGURAÇÕES E ESTADOS
+    // =========================================================================
+
+    const gravity = 0.5;
+    const flapStrength = -9;
+    const pipeWidth = 70;
+    const pipeGap = 160;
+    const pipeSpawnRate = 110;
+    const pipeSpeed = 3;
+
+    let bird;
+    let pipes;
+    let frameCount;
+    let score;
+    let highScore = localStorage.getItem('flapjs_highscore') || 0;
+    let gameState;
+
+    // =========================================================================
+    // 3. CLASSES PRINCIPAIS
+    // =========================================================================
+
+    class Bird {
+      constructor() {
+        this.totalFrames = 3;
+        this.frameWidth = 34;
+        this.frameHeight = 24;
+        this.currentFrame = 0;
+        this.animationTimer = 0;
+        this.hitboxRadius = 12; // Raio real de colisão
+
+        this.reset();
+      }
+
+      reset() {
+        this.x = 80;
+        this.y = canvas.height / 2;
+        this.velocity = 0;
+        this.radius = this.hitboxRadius;
+        this.rotation = 0;
+        this.currentFrame = 0;
+      }
+
+      update() {
+        this.velocity += gravity;
+        this.y += this.velocity;
+
+        if (this.y < this.radius) {
+          this.y = this.radius;
+          this.velocity = 0;
+        }
+
+        if (this.velocity < 0) {
+          this.rotation = -25 * Math.PI / 180;
+        } else {
+          this.rotation += 4 * Math.PI / 180;
+          if (this.rotation > 70 * Math.PI / 180) {
+            this.rotation = 70 * Math.PI / 180;
+          }
+        }
+
+        this.animationTimer++;
+        if (this.animationTimer % 6 === 0) {
+          this.currentFrame = (this.currentFrame + 1) % this.totalFrames;
+        }
+      }
+
+      draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.rotation);
+
+        if (birdImg.complete && birdImg.naturalWidth !== 0) {
+          const sourceX = this.currentFrame * this.frameWidth;
+
+          ctx.drawImage(
+            birdImg,
+            sourceX, 0,
+            this.frameWidth, this.frameHeight,
+            -16, -16,
+            32, 32
+          );
+        } else {
+          ctx.beginPath();
+          ctx.arc(0, 0, this.hitboxRadius, 0, Math.PI * 2);
+          ctx.fillStyle = '#ffeb3b';
+          ctx.fill();
+          ctx.closePath();
+        }
+
+        ctx.restore();
+      }
+
+      flap() {
+        this.velocity = flapStrength;
+        playSound(soundFlap);
+      }
+    }
+
+    class Pipe {
+      constructor() {
+        this.x = canvas.width;
+        const minCenter = pipeGap / 2 + 50;
+        const maxCenter = canvas.height - pipeGap / 2 - 50;
+        const center = Math.random() * (maxCenter - minCenter) + minCenter;
+
+        this.topHeight = center - pipeGap / 2;
+        this.bottomY = center + pipeGap / 2;
+        this.bottomHeight = canvas.height - this.bottomY;
+        this.passed = false;
+      }
+
+      update() {
+        this.x -= pipeSpeed;
+      }
+
+      draw() {
+        const hasPipeImage = pipeImg.complete && pipeImg.naturalWidth !== 0;
+
+        if (hasPipeImage) {
+          const imgAspect = pipeImg.naturalHeight / pipeImg.naturalWidth;
+          const renderHeight = pipeWidth * imgAspect; 
+
+          // Cano Superior
+          ctx.save();
+          ctx.translate(this.x + pipeWidth / 2, this.topHeight);
+          ctx.scale(1, -1);
+          ctx.drawImage(pipeImg, -pipeWidth / 2, 0, pipeWidth, renderHeight);
+          ctx.restore();
+
+          // Cano Inferior
+          ctx.drawImage(pipeImg, this.x, this.bottomY, pipeWidth, renderHeight);
+        } else {
+          ctx.fillStyle = '#4caf50';
+          ctx.fillRect(this.x, 0, pipeWidth, this.topHeight);
+          ctx.fillRect(this.x, this.bottomY, pipeWidth, this.bottomHeight);
+        }
+      }
+    }
+
+    // =========================================================================
+    // 4. LÓGICA E COLISÃO
+    // =========================================================================
+
+    function checkCircleRectCollision(circle, rx, ry, rw, rh) {
+      let closestX = Math.max(rx, Math.min(circle.x, rx + rw));
+      let closestY = Math.max(ry, Math.min(circle.y, ry + rh));
+
+      let distanceX = circle.x - closestX;
+      let distanceY = circle.y - closestY;
+
+      let distanceSquared = (distanceX * distanceX) + (distanceY * distanceY);
+      let r = circle.hitboxRadius || circle.radius;
+      return distanceSquared < (r * r);
+    }
+
+    function initializeGame() {
+      bird = new Bird();
+      pipes = [];
+      frameCount = 0;
+      score = 0;
+      gameState = 'MENU';
+      scoreElement.innerText = 'Pontuação: ' + score;
+      highScoreElement.innerText = 'Recorde: ' + highScore;
+    }
+
+    function startGame() {
+      gameState = 'PLAYING';
+    }
+
+    function gameLoop() {
+      if (bgImg.complete && bgImg.naturalWidth !== 0) {
+        ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
+      } else {
+        ctx.fillStyle = '#4fc3f7';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+
+      if (gameState === 'MENU') {
+        bird.draw();
+        drawPipes();
+        drawMenu();
+      } else if (gameState === 'PLAYING') {
+        bird.update();
+        bird.draw();
+
+        if (frameCount % pipeSpawnRate === 0) {
+          pipes.push(new Pipe());
+        }
+        updatePipes();
+        drawPipes();
+        
+        checkCollisions();
+        updateScore();
+
+        frameCount++;
+      } else if (gameState === 'GAME_OVER') {
+        bird.draw();
+        drawPipes();
+        drawGameOver();
+      }
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    function updatePipes() {
+      for (let i = pipes.length - 1; i >= 0; i--) {
+        pipes[i].update();
+        if (pipes[i].x + pipeWidth < 0) {
+          pipes.splice(i, 1);
+        }
+      }
+    }
+
+    function drawPipes() {
+      pipes.forEach(pipe => pipe.draw());
+    }
+
+    function checkCollisions() {
+      if (bird.y + bird.hitboxRadius >= canvas.height) {
+        endGame();
+        return;
+      }
+
+      for (let pipe of pipes) {
+        if (checkCircleRectCollision(bird, pipe.x, 0, pipeWidth, pipe.topHeight) ||
+            checkCircleRectCollision(bird, pipe.x, pipe.bottomY, pipeWidth, pipe.bottomHeight)) {
+          endGame();
+          return;
+        }
+      }
+    }
+
+    function updateScore() {
+      for (let pipe of pipes) {
+        if (!pipe.passed && bird.x > pipe.x + pipeWidth) {
+          score++;
+          pipe.passed = true;
+          scoreElement.innerText = 'Pontuação: ' + score;
+
+          playSound(soundScore);
+
+          if (score > highScore) {
+            highScore = score;
+            localStorage.setItem('flapjs_highscore', highScore);
+            highScoreElement.innerText = 'Recorde: ' + highScore;
+          }
+        }
+      }
+    }
+
+    function endGame() {
+      playSound(soundHit);
+      gameState = 'GAME_OVER';
+    }
+
+    // =========================================================================
+    // 5. INTERFACE E EVENTOS
+    // =========================================================================
+
+    function drawMenu() {
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 36px Segoe UI';
+      ctx.textAlign = 'center';
+      ctx.fillText('FlapJS', canvas.width / 2, canvas.height / 2 - 40);
+
+      ctx.font = '20px Segoe UI';
+      ctx.fillText('Pressione BARRA DE ESPAÇO', canvas.width / 2, canvas.height / 2 + 20);
+      ctx.fillText('ou TOQUE/CLIQUE para Iniciar', canvas.width / 2, canvas.height / 2 + 50);
+    }
+
+    function drawGameOver() {
+      ctx.fillStyle = 'rgba(200, 30, 30, 0.45)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 40px Segoe UI';
+      ctx.textAlign = 'center';
+      ctx.fillText('GAME OVER!', canvas.width / 2, canvas.height / 2 - 60);
+
+      ctx.font = '26px Segoe UI';
+      ctx.fillText('Pontuação: ' + score, canvas.width / 2, canvas.height / 2 - 10);
+      
+      ctx.fillStyle = '#ffeb3b';
+      ctx.fillText('Recorde: ' + highScore, canvas.width / 2, canvas.height / 2 + 25);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '20px Segoe UI';
+      ctx.fillText('Pressione BARRA DE ESPAÇO', canvas.width / 2, canvas.height / 2 + 80);
+      ctx.fillText('ou TOQUE/CLIQUE para Reiniciar', canvas.width / 2, canvas.height / 2 + 110);
+    }
+
+    function handleInteraction() {
+      if (gameState === 'MENU') {
+        startGame();
+        bird.flap();
+      } else if (gameState === 'PLAYING') {
+        bird.flap();
+      } else if (gameState === 'GAME_OVER') {
+        initializeGame();
+        startGame();
+        bird.flap();
+      }
+    }
+
+    document.addEventListener('keydown', (event) => {
+      if (event.code === 'Space') {
+        event.preventDefault();
+        handleInteraction();
+      }
+    });
+
+    canvas.addEventListener('mousedown', handleInteraction);
+    canvas.addEventListener('touchstart', (event) => {
+      event.preventDefault();
+      handleInteraction();
+    });
+
+    initializeGame();
+    gameLoop();
+  </script>
+</body>
+</html>
